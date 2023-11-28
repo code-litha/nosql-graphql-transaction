@@ -25,4 +25,5 @@ function getDatabase() {
 module.exports = {
   connect,
   getDatabase,
+  client,
 };

@@ -55,6 +55,28 @@ class User {
       throw error;
     }
   }
+
+  static async addWishlist(productId, userId) {
+    const updateUser = await this.collection().updateOne(
+      {
+        _id: new ObjectId(userId),
+      },
+      {
+        $addToSet: {
+          wishlists: {
+            productId: new ObjectId(productId),
+            // createdAt: new Date(),
+          },
+        },
+      }
+    );
+
+    console.log(updateUser, "<<< update user");
+
+    const user = await this.findOne({ _id: new ObjectId(userId) }, true);
+
+    return user;
+  }
 }
 
 module.exports = User;

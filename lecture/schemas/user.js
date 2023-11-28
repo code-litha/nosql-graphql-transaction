@@ -9,6 +9,11 @@ const typeDefs = `#graphql
     username: String
     email: String
     password: String
+    wishlists: [ProductWishlist]
+  }
+
+  type ProductWishlist {
+    productId: ID
   }
 
   type Query {
@@ -23,6 +28,7 @@ const typeDefs = `#graphql
   
   type Mutation {
     register(input: RegisterInput): ResponseUser
+    addWishlist(productId: ID!): ResponseUser
   }
 `;
 
@@ -76,6 +82,17 @@ const resolvers = {
       } catch (error) {
         throw new GraphQLError("Failed to Register");
       }
+    },
+    addWishlist: async (_, args, contextValue) => {
+      const { id: userId } = await contextValue.doAuthentication();
+      const { productId } = args;
+
+      const user = await User.addWishlist(productId, userId);
+
+      return {
+        statusCode: 200,
+        data: user,
+      };
     },
   },
 };

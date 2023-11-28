@@ -36,6 +36,13 @@ const typeDefs = `#graphql
     error: String
     data: User
   }
+
+  type ResponseOrder implements Response {
+    statusCode: Int!
+    message: String
+    error: String
+    data: Order
+  }
 `;
 
 module.exports = {
