@@ -63,6 +63,7 @@ class User {
       },
       {
         $addToSet: {
+          // $push
           wishlists: {
             productId: new ObjectId(productId),
             // createdAt: new Date(),
@@ -74,6 +75,54 @@ class User {
     console.log(updateUser, "<<< update user");
 
     const user = await this.findOne({ _id: new ObjectId(userId) }, true);
+
+    return user;
+  }
+
+  static async findDetailWishlist(userId) {
+    const user = await this.collection()
+      .aggregate([
+        {
+          $match: {
+            _id: new ObjectId(userId),
+          },
+        },
+        {
+          $unwind: {
+            path: "$wishlists",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $lookup: {
+            from: "products",
+            localField: "wishlists.productId",
+            foreignField: "_id",
+            as: "wishlists.productDetail",
+          },
+        },
+        {
+          $unwind: {
+            path: "$wishlists.productDetail",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $group: {
+            _id: "$_id",
+            username: {
+              $first: "$username",
+            },
+            email: {
+              $first: "$email",
+            },
+            wishlists: {
+              $push: "$$ROOT.wishlists",
+            },
+          },
+        },
+      ])
+      .toArray();
 
     return user;
   }

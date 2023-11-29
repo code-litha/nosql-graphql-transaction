@@ -13,11 +13,15 @@ const typeDefs = `#graphql
   }
 
   type ProductWishlist {
+    name: String
+    createdAt: String
     productId: ID
+    productDetail: Product
   }
 
   type Query {
     login(email: String!, password: String!): ResponseUserLogin 
+    getWishlist: ResponseUser
   }
 
   input RegisterInput {
@@ -61,6 +65,16 @@ const resolvers = {
       } catch (error) {
         throw error;
       }
+    },
+    getWishlist: async (_, _args, context) => {
+      const { id: userId } = await context.doAuthentication();
+
+      const user = await User.findDetailWishlist(userId);
+
+      return {
+        statusCode: 200,
+        data: user[0] || null,
+      };
     },
   },
   Mutation: {
