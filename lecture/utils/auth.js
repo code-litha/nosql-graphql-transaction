@@ -1,30 +1,41 @@
 const { GraphQLError } = require("graphql");
 const { verifyToken } = require("./jwt");
-const User = require("../models/user");
+const { findOneUser } = require("../models/user");
+const { ObjectId } = require("mongodb");
 
 const authentication = async (req) => {
+  console.log("authentication function kepanggil");
+  // throw new GraphQLError("Ga boleh masukkk");
+
   const headerAuthorization = req.headers.authorization;
 
+  // console.log(headerAuthorization, "<<< header auth");
+
   if (!headerAuthorization) {
-    throw new GraphQLError("You are not authenticated", {
+    throw new GraphQLError("Invalid token", {
       extensions: {
-        http: "401",
         code: "UNAUTHENTICATED",
+        http: { status: 401 },
       },
     });
   }
 
   const token = headerAuthorization.split(" ")[1];
 
-  const payload = verifyToken(token);
+  const decodedToken = verifyToken(token);
 
-  const user = await User.findOne({ email: payload.email }, true);
+  // console.log(decodedToken, "<<< decoded token");
+
+  const user = await findOneUser({
+    _id: new ObjectId(decodedToken.id),
+    email: decodedToken.email,
+  });
 
   if (!user) {
-    throw new GraphQLError("You are not authenticated", {
+    throw new GraphQLError("Invalid token", {
       extensions: {
-        http: "401",
         code: "UNAUTHENTICATED",
+        http: { status: 401 },
       },
     });
   }
@@ -32,6 +43,7 @@ const authentication = async (req) => {
   return {
     id: user._id,
     email: user.email,
+    username: user.username,
   };
 };
 

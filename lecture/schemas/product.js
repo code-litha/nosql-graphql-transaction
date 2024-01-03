@@ -1,8 +1,17 @@
 const { GraphQLError } = require("graphql");
-const Product = require("../models/product");
+const {
+  findAllProduct,
+  findOneProduct,
+  createOneProduct,
+  updateOneProduct,
+  deleteOneProduct,
+} = require("../models/product");
 const { getDatabase, client } = require("../config/db");
 const { ObjectId } = require("mongodb");
-const redis = require("../config/redis");
+
+// Config redis
+const Redis = require("ioredis");
+const redis = new Redis();
 
 const typeDefs = `#graphql
   type Product {
@@ -10,12 +19,13 @@ const typeDefs = `#graphql
     name: String
     stock: Int
     price: Int
+    authorId: ID
+    likes: [ProductLikes]
   }
 
-  input ProductCreateInput {
-    name: String!
-    stock: Int!
-    price: Int!
+  type ProductLikes {
+    userId: ID
+    username: String
   }
 
   type Order {
@@ -23,7 +33,13 @@ const typeDefs = `#graphql
     productId: ID
     userId: ID
     quantity: Int
-    price: Int
+    totalPrice: Int
+  }
+
+  input ProductCreateInput {
+    name: String!
+    stock: Int!
+    price: Int!
   }
 
   type Query {
@@ -35,16 +51,24 @@ const typeDefs = `#graphql
     productCreate(input: ProductCreateInput): ResponseProductMutation
     productUpdate(input: ProductCreateInput, id: ID!): ResponseProductMutation
     productDelete(id: ID!): ResponseProductMutation
-    orderProduct(productId: ID!, quantity: Int!): ResponseOrder 
+    addOrder (productId: ID!, quantity: Int!): Order
+    addLikes (productId: ID!): Product
   }
 `;
 
 const resolvers = {
   Query: {
-    products: async () => {
+    products: async (_, _args, contextValue) => {
+      const resContext = await contextValue.doAuthentication();
+      console.log(resContext, "<<< res context");
       try {
-        const productCache = await redis.get("data:products");
+        // 1. check dulu apakah kita sudah punya cache yang disimpan ?
+        // 2. jika ada, maka dia yang di return
+        // 3. jika tidak, maka kita akan ambil data ke database, lalu nanti disimpan ke dalam cache
 
+        const productCache = await redis.get("products");
+
+        // console.log(typeof productCache, "<<< product cache");
         if (productCache) {
           return {
             statusCode: 200,
@@ -53,9 +77,9 @@ const resolvers = {
           };
         }
 
-        const products = await Product.findAll();
+        const products = await findAllProduct();
 
-        await redis.set("data:products", JSON.stringify(products));
+        await redis.set("products", JSON.stringify(products));
 
         return {
           statusCode: 200,
@@ -68,7 +92,7 @@ const resolvers = {
     },
     product: async (_, { id }) => {
       try {
-        const product = await Product.findOne(id);
+        const product = await findOneProduct(id);
 
         return product;
       } catch (error) {
@@ -77,15 +101,18 @@ const resolvers = {
     },
   },
   Mutation: {
-    productCreate: async (_, args) => {
+    productCreate: async (_, args, contextValue) => {
+      const userLogin = await contextValue.doAuthentication();
+
       try {
-        const product = await Product.createOne({
+        const product = await createOneProduct({
           name: args.input.name,
           stock: args.input.stock,
           price: args.input.price,
+          authorId: userLogin.id,
         });
 
-        await redis.del("data:products"); // Invalidate Cache
+        await redis.del("products");
 
         return {
           statusCode: 200,
@@ -104,7 +131,7 @@ const resolvers = {
           price: args.input.price,
         };
 
-        const product = await Product.updateOne(args.id, payload);
+        const product = await updateOneProduct(args.id, payload);
 
         return {
           statusCode: 200,
@@ -117,7 +144,7 @@ const resolvers = {
     },
     productDelete: async (_, args) => {
       try {
-        await Product.deleteOne(args.id);
+        await deleteOneProduct(args.id);
 
         return {
           statusCode: 200,
@@ -127,56 +154,61 @@ const resolvers = {
         throw new GraphQLError("An error while delete data product");
       }
     },
-    orderProduct: async (_, args, contextValue) => {
+    addOrder: async (_, args, contextValue) => {
       const session = client.startSession();
       try {
         session.startTransaction();
-        const { productId, quantity } = args;
-        const { id: userId } = await contextValue.doAuthentication();
+        const userLogin = await contextValue.doAuthentication();
 
         const database = getDatabase();
         const productCollection = database.collection("products");
         const orderCollection = database.collection("orders");
 
-        // 1. Order insertOne
-        // 2. Product di update stock yang sudah dikurangin dengan quantity
-
-        const findProduct = await productCollection.findOne(
+        const product = await productCollection.findOne(
           {
-            _id: new ObjectId(productId),
-          },
-          {
-            session: session,
-          }
-        );
-
-        if (!findProduct) {
-          throw new GraphQLError("Product Not Found");
-        }
-
-        if (findProduct.stock < quantity) {
-          throw new GraphQLError("Out of stock");
-        }
-
-        const newOrder = await orderCollection.insertOne(
-          {
-            productId: findProduct._id,
-            userId,
-            quantity,
-            price: findProduct.price * quantity,
+            _id: new ObjectId(args.productId),
           },
           {
             session,
           }
         );
 
+        if (!product) {
+          throw new GraphQLError("Product Not Found", {
+            extensions: {
+              code: "NOTFOUND",
+              http: { status: 404 },
+            },
+          });
+        }
+
+        if (Number(product.stock) < Number(args.quantity)) {
+          throw new GraphQLError("Stock ga cukup", {
+            extensions: {
+              code: "BADREQUEST",
+              http: { status: 400 },
+            },
+          });
+        }
+
+        const payloadOrder = {
+          productId: product._id,
+          userId: userLogin.id,
+          quantity: args.quantity,
+          totalPrice: Number(args.quantity) * product.price,
+        };
+
+        const newOrder = await orderCollection.insertOne(payloadOrder, {
+          session,
+        });
+
         await productCollection.updateOne(
           {
-            _id: findProduct._id,
+            _id: product._id,
           },
           {
             $set: {
-              stock: findProduct.stock - quantity,
+              stock: Number(product.stock) - Number(args.quantity),
             },
           },
           {
@@ -185,21 +217,65 @@ const resolvers = {
         );
 
         await session.commitTransaction();
+
         const order = await orderCollection.findOne({
-          _id: new ObjectId(newOrder.insertedId),
+          _id: newOrder.insertedId,
         });
 
-        return {
-          statusCode: 200,
-          message: `Successfully create order`,
-          data: order,
-        };
+        return order;
       } catch (error) {
         await session.abortTransaction();
         throw error;
       } finally {
         await session.endSession();
       }
+    },
+    addLikes: async (_, args, contextValue) => {
+      const userLogin = await contextValue.doAuthentication();
+
+      const database = getDatabase();
+      const productCollection = database.collection("products");
+
+      const product = await productCollection.findOne({
+        _id: new ObjectId(args.productId),
+      });
+
+      if (!product) {
+        throw new GraphQLError("Product Not Found", {
+          extensions: {
+            code: "NOTFOUND",
+            http: { status: 404 },
+          },
+        });
+      }
+
+      await productCollection.updateOne(
+        {
+          _id: product._id,
+        },
+        {
+          $addToSet: {
+            // no duplicate
+            likes: {
+              userId: userLogin.id,
+              username: userLogin.username,
+            },
+          },
+          // $push: {
+          //   // duplicate
+          //   likes: {
+          //     userId: userLogin.id,
+          //     username: userLogin.username,
+          //   },
+          // },
+        }
+      );
+
+      const updatedProduct = await productCollection.findOne({
+        _id: new ObjectId(args.productId),
+      });
+
+      return updatedProduct;
     },
   },
 };

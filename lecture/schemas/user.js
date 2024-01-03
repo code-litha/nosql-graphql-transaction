@@ -1,5 +1,5 @@
 const { GraphQLError } = require("graphql");
-const User = require("../models/user");
+const { register, findOneUser } = require("../models/user");
 const { comparePassword } = require("../utils/bcrypt");
 const { generateToken } = require("../utils/jwt");
 
@@ -9,19 +9,6 @@ const typeDefs = `#graphql
     username: String
     email: String
     password: String
-    wishlists: [ProductWishlist]
-  }
-
-  type ProductWishlist {
-    name: String
-    createdAt: String
-    productId: ID
-    productDetail: Product
-  }
-
-  type Query {
-    login(email: String!, password: String!): ResponseUserLogin 
-    getWishlist: ResponseUser
   }
 
   input RegisterInput {
@@ -29,60 +16,24 @@ const typeDefs = `#graphql
     email: String!
     password: String!
   }
+
+  type ResUserLoginNew {
+    token: String!
+  }
   
   type Mutation {
     register(input: RegisterInput): ResponseUser
-    addWishlist(productId: ID!): ResponseUser
+    login(email: String!, password: String!):  ResUserLoginNew
   }
 `;
 
 const resolvers = {
-  Query: {
-    login: async (_, args) => {
-      try {
-        const { email, password } = args;
-
-        const user = await User.findOne({ email });
-
-        if (!user || !comparePassword(password, user.password)) {
-          throw new GraphQLError("Invalid username or password");
-        }
-
-        const payload = {
-          id: user._id,
-          email: user.email,
-        };
-
-        const token = generateToken(payload);
-
-        return {
-          statusCode: 200,
-          message: `Successfully to login`,
-          data: {
-            token,
-          },
-        };
-      } catch (error) {
-        throw error;
-      }
-    },
-    getWishlist: async (_, _args, context) => {
-      const { id: userId } = await context.doAuthentication();
-
-      const user = await User.findDetailWishlist(userId);
-
-      return {
-        statusCode: 200,
-        data: user[0] || null,
-      };
-    },
-  },
   Mutation: {
     register: async (_, args) => {
       try {
         const { username, email, password } = args.input;
 
-        const user = await User.createOne({
+        const user = await register({
           username,
           email,
           password,
@@ -97,16 +48,34 @@ const resolvers = {
         throw new GraphQLError("Failed to Register");
       }
     },
-    addWishlist: async (_, args, contextValue) => {
-      const { id: userId } = await contextValue.doAuthentication();
-      const { productId } = args;
+    login: async (_, args) => {
+      try {
+        const { email, password } = args;
 
-      const user = await User.addWishlist(productId, userId);
+        const user = await findOneUser({ email });
 
-      return {
-        statusCode: 200,
-        data: user,
-      };
+        if (!user || !comparePassword(password, user.password)) {
+          throw new GraphQLError("Invalid username or password", {
+            extensions: {
+              code: "UNAUTHENTICATED",
+              http: { status: 401 },
+            },
+          });
+        }
+
+        const payload = {
+          id: user._id,
+          email: user.email,
+        };
+
+        const token = generateToken(payload);
+
+        return {
+          token,
+        };
+      } catch (error) {
+        throw error;
+      }
     },
   },
 };

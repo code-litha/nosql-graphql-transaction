@@ -6,6 +6,10 @@ const { responseTypeDefs } = require("./schemas/response");
 const PORT = process.env.PORT || 4000;
 const mongoConnection = require("./config/db");
 const { userTypeDefs, userResolvers } = require("./schemas/user");
+const { GraphQLError } = require("graphql");
+const { verifyToken } = require("./utils/jwt");
+const { findOneUser } = require("./models/user");
+const { ObjectId } = require("mongodb");
 const authentication = require("./utils/auth");
 
 const server = new ApolloServer({
@@ -21,11 +25,11 @@ const server = new ApolloServer({
       listen: {
         port: PORT,
       },
-      context: async ({ req }) => {
+      context: async ({ req, res }) => {
         // console.log("this console will be triggered on every request");
 
         return {
-          doAuthentication: async () => await authentication(req),
+          doAuthentication: () => authentication(req),
         };
       },
     });
